@@ -3,9 +3,10 @@ import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
 from pathlib import Path
+import io
 
 # --------------------------------------------------
-# 1. 페이지 기본 설정
+# 1. 페이지 설정
 # --------------------------------------------------
 st.set_page_config(
     page_title="세계 국가별 MBTI 분석",
@@ -14,86 +15,207 @@ st.set_page_config(
 )
 
 # --------------------------------------------------
-# 2. CSV 데이터 불러오기
-# --------------------------------------------------
-DATA_FILE = Path(__file__).parent / "countriesMBTI_16types.csv"
-
-
-@st.cache_data
-def load_data(file_path):
-
-    data = pd.read_csv(file_path)
-
-    if "Country" not in data.columns:
-        raise ValueError("CSV 파일에 Country 열이 없습니다.")
-
-    mbti_columns = [
-        column for column in data.columns
-        if column != "Country"
-    ]
-
-    if len(mbti_columns) != 16:
-        raise ValueError(
-            f"MBTI 열은 16개여야 합니다. 현재 {len(mbti_columns)}개입니다."
-        )
-
-    data["Country"] = data["Country"].astype(str).str.strip()
-
-    data = data.dropna(subset=["Country"])
-    data = data.drop_duplicates(
-        subset=["Country"],
-        keep="first"
-    )
-
-    for column in mbti_columns:
-        data[column] = pd.to_numeric(
-            data[column],
-            errors="coerce"
-        )
-
-    data[mbti_columns] = data[mbti_columns].fillna(0)
-
-    return data, mbti_columns
-
-
-# --------------------------------------------------
-# 3. 앱 제목
+# 2. 앱 제목
 # --------------------------------------------------
 st.title("🌍 세계 국가별 MBTI 분석")
 
 st.markdown("""
-### 국가별 MBTI 성격 유형을 한눈에 비교해 보세요!
+### 세계 여러 나라의 MBTI 유형을 비교해 보세요!
 
-158개 국가의 MBTI 16가지 유형별 비율을
+국가를 선택하면 MBTI 16가지 유형별 비율을
 막대그래프로 확인할 수 있습니다.
 """)
 
 # --------------------------------------------------
-# 4. 데이터 로딩 오류 처리
+# 3. CSV 파일 자동 검색
+# --------------------------------------------------
+CSV_FILENAME = "countriesMBTI_16types.csv"
+
+BASE_DIR = Path(__file__).resolve().parent
+
+def find_csv_file():
+
+    # 검색할 폴더
+    search_dirs = [
+        BASE_DIR,
+        BASE_DIR / "data",
+        Path.cwd(),
+        Path.cwd() / "data"
+    ]
+
+    # 중복 폴더 제거
+    unique_dirs = list(dict.fromkeys(search_dirs))
+
+    # 먼저 정확한 파일명 검색
+    for folder in unique_dirs:
+
+        file_path = folder / CSV_FILENAME
+
+        if file_path.is_file():
+            return file_path
+
+    # 대소문자 차이가 있는 파일명도 검색
+    for folder in unique_dirs:
+
+        if folder.is_dir():
+
+            for file_path in folder.glob("*.csv"):
+
+                if file_path.name.lower() == CSV_FILENAME.lower():
+                    return file_path
+
+    # 하위 폴더까지 검색
+    if BASE_DIR.is_dir():
+
+        for file_path in BASE_DIR.rglob("*.csv"):
+
+            if file_path.name.lower() == CSV_FILENAME.lower():
+                return file_path
+
+    return None
+
+
+# --------------------------------------------------
+# 4. CSV 데이터 읽기
+# --------------------------------------------------
+@st.cache_data
+def load_data(file_bytes):
+
+    # UTF-8 및 한글 인코딩 대응
+    try:
+        df = pd.read_csv(
+            io.BytesIO(file_bytes),
+            encoding="utf-8-sig"
+        )
+
+    except UnicodeDecodeError:
+        df = pd.read_csv(
+            io.BytesIO(file_bytes),
+            encoding="cp949"
+        )
+
+    # 열 이름 공백 제거
+    df.columns = df.columns.astype(str).str.strip()
+
+    # 국가 열 확인
+    if "Country" not in df.columns:
+
+        raise ValueError(
+            "CSV 파일에 Country 열이 없습니다."
+        )
+
+    # MBTI 열 추출
+    mbti_columns = [
+        col for col in df.columns
+        if col != "Country"
+    ]
+
+    if len(mbti_columns) != 16:
+
+        raise ValueError(
+            f"MBTI 열은 16개여야 합니다. "
+            f"현재 {len(mbti_columns)}개입니다."
+        )
+
+    # 국가명 정리
+    df["Country"] = (
+        df["Country"]
+        .astype(str)
+        .str.strip()
+    )
+
+    df = df.dropna(subset=["Country"])
+
+    df = df[
+        df["Country"] != ""
+    ]
+
+    df = df.drop_duplicates(
+        subset=["Country"],
+        keep="first"
+    )
+
+    # 숫자 데이터 변환
+    for col in mbti_columns:
+
+        df[col] = pd.to_numeric(
+            df[col],
+            errors="coerce"
+        )
+
+    df[mbti_columns] = (
+        df[mbti_columns].fillna(0)
+    )
+
+    return df, mbti_columns
+
+
+# --------------------------------------------------
+# 5. CSV 파일 불러오기
+# --------------------------------------------------
+csv_path = find_csv_file()
+
+file_bytes = None
+
+if csv_path is not None:
+
+    try:
+
+        file_bytes = csv_path.read_bytes()
+
+        st.success(
+            f"✅ CSV 파일을 찾았습니다: {csv_path.name}"
+        )
+
+    except Exception as error:
+
+        st.error(
+            f"파일을 읽을 수 없습니다: {error}"
+        )
+
+# CSV 파일을 찾지 못한 경우 직접 업로드
+if file_bytes is None:
+
+    st.warning(
+        "CSV 파일을 자동으로 찾지 못했습니다. "
+        "아래에서 CSV 파일을 직접 업로드해 주세요."
+    )
+
+    uploaded_file = st.file_uploader(
+        "📂 countriesMBTI_16types.csv 업로드",
+        type=["csv"]
+    )
+
+    if uploaded_file is None:
+
+        st.info("""
+        GitHub 저장소에 CSV 파일을 올리거나
+        위의 업로드 버튼으로 CSV 파일을 선택해 주세요.
+        """)
+
+        st.stop()
+
+    file_bytes = uploaded_file.getvalue()
+
+
+# --------------------------------------------------
+# 6. 데이터 분석
 # --------------------------------------------------
 try:
 
-    df, mbti_columns = load_data(DATA_FILE)
+    df, mbti_columns = load_data(file_bytes)
 
-except FileNotFoundError:
+except Exception as error:
 
     st.error(
-        "CSV 파일을 찾을 수 없습니다. "
-        "countriesMBTI_16types.csv 파일을 "
-        "app.py와 같은 폴더에 넣어 주세요."
+        f"데이터 분석 중 오류가 발생했습니다: {error}"
     )
 
     st.stop()
 
-except Exception as error:
-
-    st.error(f"데이터 오류: {error}")
-
-    st.stop()
-
 
 # --------------------------------------------------
-# 5. 국가 선택
+# 7. 국가 선택
 # --------------------------------------------------
 countries = sorted(
     df["Country"].unique().tolist()
@@ -101,13 +223,12 @@ countries = sorted(
 
 selected_country = st.selectbox(
     "🗺️ 분석할 국가를 선택하세요.",
-    countries,
-    index=0
+    countries
 )
 
 
 # --------------------------------------------------
-# 6. 선택한 국가의 MBTI 데이터 추출
+# 8. 선택 국가 데이터 추출
 # --------------------------------------------------
 country_data = df.loc[
     df["Country"] == selected_country,
@@ -116,7 +237,7 @@ country_data = df.loc[
 
 
 # --------------------------------------------------
-# 7. MBTI 비율 높은 순서대로 정렬
+# 9. MBTI 비율 정렬
 # --------------------------------------------------
 chart_data = (
     country_data
@@ -129,14 +250,14 @@ chart_data = (
     .reset_index(drop=True)
 )
 
-# 소수 데이터를 백분율로 변환
+# 백분율 변환
 chart_data["Percentage"] = (
     chart_data["Ratio"] * 100
 )
 
 
 # --------------------------------------------------
-# 8. 색상 변환 함수
+# 10. 색상 변환 함수
 # --------------------------------------------------
 def hex_to_rgb(hex_color):
 
@@ -150,7 +271,9 @@ def hex_to_rgb(hex_color):
 
 def rgb_to_hex(rgb):
 
-    return "#{:02X}{:02X}{:02X}".format(*rgb)
+    return "#{:02X}{:02X}{:02X}".format(
+        *rgb
+    )
 
 
 def interpolate_color(
@@ -160,6 +283,7 @@ def interpolate_color(
 ):
 
     start = hex_to_rgb(start_color)
+
     end = hex_to_rgb(end_color)
 
     rgb = tuple(
@@ -174,22 +298,25 @@ def interpolate_color(
 
 
 # --------------------------------------------------
-# 9. 막대그래프 색상 지정
+# 11. 그래프 색상 지정
 # --------------------------------------------------
 colors = []
 
-# 1위는 빨간색
+# 1위 빨간색
 colors.append("#E53935")
 
-# 나머지는 파란색 그라데이션
+# 나머지 파란색 그라데이션
 blue_start = "#1557A0"
+
 blue_end = "#DCEBFF"
 
 remaining_count = len(chart_data) - 1
 
 for i in range(remaining_count):
 
-    amount = i / max(remaining_count - 1, 1)
+    amount = (
+        i / max(remaining_count - 1, 1)
+    )
 
     color = interpolate_color(
         blue_start,
@@ -201,7 +328,7 @@ for i in range(remaining_count):
 
 
 # --------------------------------------------------
-# 10. 가장 높은 MBTI 정보
+# 12. 1위 MBTI 확인
 # --------------------------------------------------
 top_mbti = chart_data.iloc[0]["MBTI"]
 
@@ -209,7 +336,7 @@ top_percentage = chart_data.iloc[0]["Percentage"]
 
 
 # --------------------------------------------------
-# 11. 주요 통계 표시
+# 13. 주요 통계 표시
 # --------------------------------------------------
 col1, col2, col3 = st.columns(3)
 
@@ -239,7 +366,7 @@ st.divider()
 
 
 # --------------------------------------------------
-# 12. MBTI 막대그래프 만들기
+# 14. 막대그래프 생성
 # --------------------------------------------------
 fig = go.Figure(
 
@@ -283,14 +410,14 @@ fig = go.Figure(
 
 
 # --------------------------------------------------
-# 13. 그래프 디자인
+# 15. 그래프 디자인
 # --------------------------------------------------
 fig.update_layout(
 
     title=dict(
 
         text=(
-            f"🇺🇳 {selected_country}의 "
+            f"🌍 {selected_country}의 "
             "MBTI 16가지 유형별 비율"
         ),
 
@@ -335,9 +462,7 @@ fig.update_layout(
 
     paper_bgcolor="white",
 
-    font=dict(
-        size=13
-    ),
+    font=dict(size=13),
 
     showlegend=False
 
@@ -345,7 +470,7 @@ fig.update_layout(
 
 
 # --------------------------------------------------
-# 14. Streamlit 화면에 그래프 출력
+# 16. 그래프 화면 출력
 # --------------------------------------------------
 st.plotly_chart(
     fig,
@@ -354,7 +479,7 @@ st.plotly_chart(
 
 
 # --------------------------------------------------
-# 15. MBTI 순위표
+# 17. MBTI 순위표
 # --------------------------------------------------
 st.subheader("🏅 MBTI 유형별 순위")
 
@@ -382,22 +507,22 @@ st.dataframe(
 
 
 # --------------------------------------------------
-# 16. 데이터 안내
+# 18. 데이터 안내
 # --------------------------------------------------
 with st.expander("ℹ️ 데이터 이용 안내"):
 
     st.write("""
-    - 업로드한 countriesMBTI_16types.csv 파일을 사용합니다.
-    - 원본 데이터의 소수 비율을 백분율로 변환합니다.
-    - 조사 연도, 표본 크기 및 조사 방법은 파일에서 확인할 수 없습니다.
-    - 따라서 국가 전체 국민의 성격을 단정하는 자료가 아닌
-      참고용 데이터로 활용해 주세요.
+    - 업로드한 CSV 파일을 바탕으로 분석합니다.
+    - 원본 소수 데이터를 백분율로 변환합니다.
+    - 조사 연도와 표본 크기는 제공된 CSV에서 확인할 수 없습니다.
+    - 국가별 MBTI 비율은 참고용 자료이며,
+      국가 구성원 전체의 성격을 단정하지 않습니다.
     """)
 
 
 # --------------------------------------------------
-# 17. 하단 안내
+# 19. 하단 안내
 # --------------------------------------------------
 st.caption(
-    "🌍 세계 국가별 MBTI 분석 | Streamlit으로 제작"
+    "🌍 세계 국가별 MBTI 분석 | Streamlit 제작"
 )
